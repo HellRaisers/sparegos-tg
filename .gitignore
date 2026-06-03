@@ -1,0 +1,12 @@
+# Секреты и состояние — НИКОГДА не коммитим
+.env
+credentials.json
+token.json
+state.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
