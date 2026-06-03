@@ -3,6 +3,14 @@
 Бот пересылает в Telegram-чат содержимое писем от Upwork об уведомлении
 о новых сообщениях клиентов.
 
+> **TL;DR что нужно от тебя** (всё остальное уже готово в коде):
+> 1. В Google Cloud завести OAuth-credentials (тип *Desktop app*) → файл `credentials.json`.
+> 2. Один раз пройти авторизацию Google → появится `token.json`.
+> 3. `docker compose up -d`.
+>
+> Telegram уже настроен: бот и группа «Sparegos || Upwork Messages» (`chat_id = -5159603846`)
+> прописываются в `.env`. Подробный чеклист — в конце файла.
+
 Как работает:
 - раз в N минут (по умолчанию 10) скрипт ищет в почте новые письма
   по фильтру «**отправитель Upwork** + **тема про новое сообщение**»;
@@ -54,7 +62,38 @@ python main.py --auth
 
 ---
 
-## Запуск
+## Запуск через Docker (рекомендуется)
+
+Ничего, кроме Docker, ставить не нужно.
+
+1. Сложи секреты:
+   ```bash
+   cp .env.example .env        # вписать TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID
+   mkdir -p data
+   cp credentials.json data/   # OAuth-файл из Google Cloud
+   ```
+2. Один раз пройти авторизацию Google (создаст `data/token.json`).
+   - **Проще всего** — на ноутбуке с браузером: `python main.py --auth`
+     (положив `credentials.json` рядом), затем скопировать получившийся
+     `token.json` в `data/` на сервере.
+   - **Или прямо через Docker** на машине, где открыт браузер:
+     ```bash
+     docker compose run --rm -p 8765:8765 \
+       -e OAUTH_PORT=8765 -e OAUTH_OPEN_BROWSER=0 \
+       upwork-tg python main.py --auth
+     ```
+     В логе появится ссылка — открой её в браузере, подтверди доступ.
+3. Запуск как сервис:
+   ```bash
+   docker compose up -d        # соберёт образ и запустит в фоне
+   docker compose logs -f      # посмотреть, что пересылается
+   ```
+   Контейнер крутит `python main.py --loop` и сам перезапускается
+   (`restart: unless-stopped`). Проверка почты — каждые `POLL_INTERVAL_SECONDS`.
+
+---
+
+## Запуск без Docker
 
 Одна проверка (для теста и для cron):
 ```bash
@@ -124,5 +163,30 @@ sudo systemctl enable --now upwork-tg
 
 ## Безопасность
 
-`.env`, `credentials.json`, `token.json`, `state.json` уже в `.gitignore` —
-**никогда не коммить их**, это доступ к твоей почте и боту.
+`.env`, `credentials.json`, `token.json`, `state.json`, папка `data/` уже
+в `.gitignore` — **никогда не коммить их**, это доступ к твоей почте и боту.
+
+---
+
+## Чеклист: что нужно сделать тебе
+
+Код, Telegram-бот и Docker уже готовы. Осталось три шага — все они касаются
+доступа к **твоему** Gmail (за тебя его выдать нельзя):
+
+- [ ] **1. credentials.json.** В [Google Cloud Console](https://console.cloud.google.com/):
+  создать проект → включить **Gmail API** → **OAuth consent screen** (External,
+  добавить себя в *Test users*) → **Credentials → OAuth client ID → Desktop app**
+  → скачать JSON → переименовать в `credentials.json`, положить в `data/`.
+- [ ] **2. token.json.** Пройти авторизацию один раз (см. «Запуск через Docker»,
+  шаг 2) — войти в нужный Gmail, подтвердить доступ. Файл создастся сам.
+- [ ] **3. Запуск.** `docker compose up -d` — и проверить `docker compose logs -f`.
+
+`.env` заполнить так (Telegram уже известен):
+```
+TELEGRAM_BOT_TOKEN=8328593322:AAEXYyl3XkSkPcJRZANRDOPr-YsGUQ3qou8
+TELEGRAM_CHAT_ID=-5159603846
+```
+
+После первого успешного запуска стоит проверить, что в группу падают именно
+нужные письма. Если фильтр ловит лишнее или пропускает — подправь
+`GMAIL_SUBJECT_QUERY` / `GMAIL_SENDER` в `.env` под реальные темы писем Upwork.

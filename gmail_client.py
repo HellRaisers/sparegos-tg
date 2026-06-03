@@ -34,7 +34,11 @@ def get_service(credentials_file: str, token_file: str):
                     f"(тип 'Desktop app') из Google Cloud Console и положи рядом."
                 )
             flow = InstalledAppFlow.from_client_secrets_file(credentials_file, SCOPES)
-            creds = flow.run_local_server(port=0)
+            # Порт и автооткрытие браузера настраиваются для запуска в Docker:
+            # OAUTH_PORT=8765 OAUTH_OPEN_BROWSER=0 — тогда ссылку открываешь сам.
+            port = int(os.getenv("OAUTH_PORT", "0"))
+            open_browser = os.getenv("OAUTH_OPEN_BROWSER", "1") != "0"
+            creds = flow.run_local_server(port=port, open_browser=open_browser)
         with open(token_file, "w") as fh:
             fh.write(creds.to_json())
 

@@ -1,0 +1,17 @@
+services:
+  upwork-tg:
+    build: .
+    image: upwork-tg
+    container_name: upwork-tg
+    restart: unless-stopped
+    # Токен, chat_id и фильтр писем берутся из .env
+    env_file: .env
+    # Пути к файлам кладём в подключённую папку ./data (см. ниже)
+    environment:
+      GMAIL_CREDENTIALS_FILE: /app/data/credentials.json
+      GMAIL_TOKEN_FILE: /app/data/token.json
+      STATE_FILE: /app/data/state.json
+    volumes:
+      # В ./data на хосте лежат credentials.json и token.json,
+      # сюда же бот пишет state.json (список обработанных писем).
+      - ./data:/app/data
