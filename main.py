@@ -1,7 +1,7 @@
 """Upwork → Telegram.
 
 Проверяет почту на новые письма от Upwork с уведомлением о сообщении клиента
-и пересылает их содержимое в Telegram-чат.
+и шлёт в Telegram-чат: кто написал, по какому проекту и ссылку на переписку.
 
 Использование:
     python main.py --auth     # один раз: авторизация в Google (создаёт token.json)
@@ -17,23 +17,26 @@ import config
 import gmail_client
 import state as state_store
 import telegram_client
-from email_parser import extract_body, get_header
+from email_parser import client_from_subject, extract_upwork_info, get_header
 
-# Сколько символов тела письма максимум отправлять
-BODY_LIMIT = 3500
+# Запасная ссылка, если в письме не нашлось прямой ссылки на переписку
+FALLBACK_LINK = "https://www.upwork.com/nx/messages/"
 
 
-def format_message(sender: str, subject: str, date: str, body: str) -> str:
-    body = body[:BODY_LIMIT]
-    if len(body) == BODY_LIMIT:
-        body += "\n…"
-    return (
-        "📩 <b>Новое сообщение из Upwork</b>\n\n"
-        f"<b>От:</b> {html_lib.escape(sender)}\n"
-        f"<b>Тема:</b> {html_lib.escape(subject)}\n"
-        f"<b>Дата:</b> {html_lib.escape(date)}\n\n"
-        f"{html_lib.escape(body)}"
-    )
+def _esc(text: str) -> str:
+    return html_lib.escape(text)
+
+
+def format_message(client: str, project: str, date: str, link: str) -> str:
+    lines = ["📩 <b>Новое сообщение в Upwork</b>", ""]
+    lines.append(f"<b>От:</b> {_esc(client)}")
+    if project and project != client:
+        lines.append(f"<b>Проект:</b> {_esc(project)}")
+    if date:
+        lines.append(f"<b>Когда:</b> {_esc(date)}")
+    lines.append("")
+    lines.append(f'🔗 <a href="{_esc(link or FALLBACK_LINK)}">Открыть переписку в Upwork</a>')
+    return "\n".join(lines)
 
 
 def run_once() -> int:
@@ -59,18 +62,20 @@ def run_once() -> int:
             continue
 
         full = gmail_client.get_message(service, msg_id)
-        sender = get_header(full, "From")
         subject = get_header(full, "Subject")
         date = get_header(full, "Date")
-        body = extract_body(full.get("payload", {})) or full.get("snippet", "")
+        payload = full.get("payload", {})
 
-        text = format_message(sender, subject, date, body)
+        client = client_from_subject(subject) or get_header(full, "From")
+        info = extract_upwork_info(payload)
+
+        text = format_message(client, info["project"], date, info["link"])
         telegram_client.send_message(token, chat_id, text)
 
         processed.add(msg_id)
         state["processed"].append(msg_id)
         sent += 1
-        print(f"[tg] переслано: {subject!r}")
+        print(f"[tg] переслано: {client!r} — {subject!r}")
 
     state_store.save(config.STATE_FILE, state)
     print(f"[ok] новых писем переслано: {sent}")
