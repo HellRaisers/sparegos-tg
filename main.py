@@ -17,7 +17,12 @@ import config
 import gmail_client
 import state as state_store
 import telegram_client
-from email_parser import client_from_subject, extract_upwork_info, get_header
+from email_parser import (
+    client_from_subject,
+    extract_message_text,
+    extract_upwork_info,
+    get_header,
+)
 
 # Запасная ссылка, если в письме не нашлось прямой ссылки на переписку
 FALLBACK_LINK = "https://www.upwork.com/nx/messages/"
@@ -27,13 +32,17 @@ def _esc(text: str) -> str:
     return html_lib.escape(text)
 
 
-def format_message(client: str, project: str, date: str, link: str) -> str:
+def format_message(client: str, project: str, date: str, link: str, message: str = "") -> str:
     lines = ["📩 <b>Новое сообщение в Upwork</b>", ""]
     lines.append(f"<b>От:</b> {_esc(client)}")
     if project and project != client:
         lines.append(f"<b>Проект:</b> {_esc(project)}")
     if date:
         lines.append(f"<b>Когда:</b> {_esc(date)}")
+    if message:
+        lines.append("")
+        lines.append("💬 <b>Сообщение:</b>")
+        lines.append(_esc(message))
     lines.append("")
     lines.append(f'🔗 <a href="{_esc(link or FALLBACK_LINK)}">Открыть переписку в Upwork</a>')
     return "\n".join(lines)
@@ -68,8 +77,9 @@ def run_once() -> int:
 
         client = client_from_subject(subject) or get_header(full, "From")
         info = extract_upwork_info(payload)
+        message = extract_message_text(payload)
 
-        text = format_message(client, info["project"], date, info["link"])
+        text = format_message(client, info["project"], date, info["link"], message)
         telegram_client.send_message(token, chat_id, text)
 
         processed.add(msg_id)

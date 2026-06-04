@@ -64,6 +64,82 @@ def extract_body(payload: dict) -> str:
     return ""
 
 
+# Заголовочные строки, после которых в письме Upwork начинается сам текст сообщения
+_START_MARKERS = (
+    "sent you a message", "new message from", "you have a new message",
+    "отправил вам сообщение", "отправила вам сообщение", "новое сообщение",
+)
+
+# Маркеры начала служебного «подвала» — на них обрываем сбор текста сообщения
+_STOP_MARKERS = (
+    "view & reply", "view and reply", "view message", "reply to", "reply on upwork",
+    "open in upwork", "go to upwork", "see the message", "view conversation",
+    "ответить", "посмотреть сообщение", "перейти в upwork", "открыть переписку",
+    "this is a notification", "you received this email", "you're receiving",
+    "you are receiving", "вы получили это письмо", "почему вы это получили",
+    "unsubscribe", "отписаться", "manage notification", "notification settings",
+    "настройки уведомлен", "© ", "upwork global", "all rights reserved",
+    "privacy policy", "terms of service", "flag as inappropriate",
+    "download the upwork", "get the upwork app",
+)
+
+
+def _is_stop(line: str) -> bool:
+    low = line.lower()
+    return any(m in low for m in _STOP_MARKERS)
+
+
+def _is_noise(line: str) -> bool:
+    """Служебные строки внутри тела: ссылки Upwork, одиночные URL, разделители."""
+    low = line.strip().lower()
+    if not low:
+        return True
+    if "upwork.com/" in low:
+        return True
+    if low.startswith("http") and " " not in low:  # одиночная ссылка без текста
+        return True
+    if low in ("upwork", "—", "–", "-", "·", "|", "*"):
+        return True
+    return False
+
+
+def extract_message_text(payload: dict, max_len: int = 1500) -> str:
+    """Из письма-уведомления Upwork достаёт сам текст сообщения клиента.
+
+    Эвристика: берём читаемый текст письма, находим строку-заголовок
+    «… sent you a message», и собираем строки после неё до начала
+    служебного подвала (кнопки Reply/View, отписка, копирайт). Если
+    заголовок не найден — собираем с начала тела (фолбэк), всё равно
+    выкидывая шум и подвал. Длинное сообщение обрезаем.
+    """
+    body = extract_body(payload)
+    if not body:
+        return ""
+    lines = body.splitlines()
+
+    start = 0
+    for i, line in enumerate(lines):
+        low = line.lower()
+        if any(m in low for m in _START_MARKERS):
+            start = i + 1
+            break
+
+    collected = []
+    for line in lines[start:]:
+        if _is_stop(line):
+            break
+        if _is_noise(line):
+            continue
+        collected.append(line.strip())
+
+    text = "\n".join(collected).strip()
+    while "\n\n\n" in text:
+        text = text.replace("\n\n\n", "\n\n")
+    if len(text) > max_len:
+        text = text[:max_len].rstrip() + "…"
+    return text
+
+
 def client_from_subject(subject: str) -> str:
     """Из темы «Aerogrip L. sent you a message» достаёт имя клиента."""
     for marker in (" sent you a message", " отправил", " — Upwork"):
