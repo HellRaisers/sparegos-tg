@@ -92,6 +92,52 @@ def run_once() -> int:
     return sent
 
 
+def send_last(count: int = 1) -> int:
+    """Тест: берёт последние `count` писем Upwork (без ограничения по свежести)
+    и шлёт их в чат с пометкой ТЕСТ. Помечает обработанными, чтобы штатный
+    опрос не отправил их повторно."""
+    service = gmail_client.get_service(config.CREDENTIALS_FILE, config.TOKEN_FILE)
+    query = gmail_client.build_query(config.GMAIL_SENDER, config.GMAIL_SUBJECT_QUERY, "")
+    print(f"[test] запрос (без newer_than): {query}")
+    messages = gmail_client.list_messages(service, query)
+    if not messages:
+        print("[test] подходящих писем Upwork не найдено")
+        return 0
+
+    state = state_store.load(config.STATE_FILE)
+    processed = set(state["processed"])
+    token = config.telegram_bot_token()
+    chat_id = config.telegram_chat_id()
+
+    sent = 0
+    # messages — новейшие первыми; reversed → в чат от старого к новому
+    for ref in reversed(messages[:count]):
+        msg_id = ref["id"]
+        full = gmail_client.get_message(service, msg_id)
+        subject = get_header(full, "Subject")
+        date = get_header(full, "Date")
+        payload = full.get("payload", {})
+
+        client = client_from_subject(subject) or get_header(full, "From")
+        info = extract_upwork_info(payload)
+        message = extract_message_text(payload)
+
+        text = "🧪 <b>ТЕСТ</b>\n\n" + format_message(
+            client, info["project"], date, info["link"], message
+        )
+        telegram_client.send_message(token, chat_id, text)
+
+        if msg_id not in processed:
+            processed.add(msg_id)
+            state["processed"].append(msg_id)
+        sent += 1
+        print(f"[test] отправлено: {client!r} — {subject!r}")
+
+    state_store.save(config.STATE_FILE, state)
+    print(f"[ok] тест: отправлено {sent}")
+    return sent
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Upwork → Telegram пересылка")
     parser.add_argument(
@@ -104,11 +150,23 @@ def main() -> None:
         action="store_true",
         help="Бесконечный цикл с интервалом POLL_INTERVAL_SECONDS",
     )
+    parser.add_argument(
+        "--send-last",
+        nargs="?",
+        const=1,
+        type=int,
+        metavar="N",
+        help="Тест: отправить последние N писем Upwork в чат (по умолчанию 1)",
+    )
     args = parser.parse_args()
 
     if args.auth:
         gmail_client.get_service(config.CREDENTIALS_FILE, config.TOKEN_FILE)
         print("[ok] авторизация выполнена, token.json создан")
+        return
+
+    if args.send_last:
+        send_last(args.send_last)
         return
 
     if args.loop:
