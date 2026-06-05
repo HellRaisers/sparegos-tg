@@ -29,7 +29,7 @@ def telegram_chat_id() -> str:
 GMAIL_SENDER = os.getenv("GMAIL_SENDER", "upwork.com")
 GMAIL_SUBJECT_QUERY = os.getenv(
     "GMAIL_SUBJECT_QUERY",
-    'subject:("new message" OR "sent you a message" OR "новое сообщение")',
+    'subject:("sent you a message" OR "direct message from a client")',
 )
 GMAIL_LOOKBACK = os.getenv("GMAIL_LOOKBACK", "2d")
 

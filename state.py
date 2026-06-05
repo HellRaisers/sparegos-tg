@@ -13,9 +13,11 @@ def load(path: str) -> dict:
     if os.path.exists(path):
         with open(path, "r") as fh:
             try:
-                return json.load(fh)
+                data = json.load(fh)
             except json.JSONDecodeError:
-                pass
+                data = None
+        if isinstance(data, dict) and isinstance(data.get("processed"), list):
+            return data
     return {"processed": []}
 
 
