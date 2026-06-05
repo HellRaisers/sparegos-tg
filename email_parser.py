@@ -34,9 +34,6 @@ _STOP_LABELS = {
 # Максимум символов текста сообщения
 _MSG_LIMIT = 1500
 
-# Длина текста за один проход обработки
-_MAX_LEN = 4000
-
 
 def get_header(message: dict, name: str) -> str:
     for header in message.get("payload", {}).get("headers", []):
@@ -58,13 +55,6 @@ def _find_part(payload: dict, mime: str):
         if found:
             return found
     return None
-
-
-def clean_text(text: str) -> str:
-    """Убирает невидимые символы и пустые строки."""
-    text = text.translate(_INVISIBLE)
-    lines = [line.strip() for line in text.splitlines()]
-    return "\n".join(line for line in lines if line)
 
 
 def client_name(from_header: str, subject: str = "") -> str:
