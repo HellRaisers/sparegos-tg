@@ -20,13 +20,17 @@ import state as state_store
 import telegram_client
 from email_parser import (
     client_name,
+    extract_invite_info,
     extract_message_text,
     extract_upwork_info,
     get_header,
+    invite_title,
+    is_invitation,
 )
 
-# Запасная ссылка, если в письме не нашлось прямой ссылки на переписку
+# Запасные ссылки, если в письме не нашлось прямой ссылки
 FALLBACK_LINK = "https://www.upwork.com/nx/messages/"
+FALLBACK_INVITE = "https://www.upwork.com/nx/find-work/"
 
 
 def _esc(text: str) -> str:
@@ -46,10 +50,31 @@ def format_message(client: str, project: str, message: str, link: str) -> str:
     return "\n".join(lines)
 
 
+def format_invite(title: str, budget: str, description: str, link: str) -> str:
+    lines = ["📨 <b>Приглашение на проект (Upwork)</b>", ""]
+    lines.append(f"<b>Проект:</b> {_esc(title)}")
+    if budget:
+        lines.append(f"<b>Условия:</b> {_esc(budget)}")
+    if description:
+        lines.append("")
+        lines.append(f"📝 {_esc(description)}")
+    lines.append("")
+    lines.append(f'🔗 <a href="{_esc(link or FALLBACK_INVITE)}">Открыть приглашение</a>')
+    return "\n".join(lines)
+
+
 def _build_message(full: dict) -> tuple:
-    """Из полного письма собирает (client, текст для Telegram)."""
+    """Из полного письма собирает (заголовок_для_лога, subject, текст для Telegram)."""
     subject = get_header(full, "Subject")
     payload = full.get("payload", {})
+
+    if is_invitation(subject):
+        title = invite_title(subject)
+        inv = extract_invite_info(payload)
+        return title, subject, format_invite(
+            title, inv["budget"], inv["description"], inv["link"]
+        )
+
     client = client_name(get_header(full, "From"), subject)
     info = extract_upwork_info(payload, client)
     message = extract_message_text(payload, client)

@@ -34,6 +34,11 @@ _STOP_LABELS = {
 # Максимум символов текста сообщения
 _MSG_LIMIT = 1500
 
+# Ссылка на отклик/вакансию в письме-приглашении
+_PROPOSAL_MARKER = "/nx/proposals/"
+# Максимум символов описания вакансии в приглашении
+_DESC_LIMIT = 800
+
 
 def get_header(message: dict, name: str) -> str:
     for header in message.get("payload", {}).get("headers", []):
@@ -131,6 +136,74 @@ def _clean_link(href: str) -> str:
     parts = urlsplit(href)
     query = [(k, v) for k, v in parse_qsl(parts.query) if k in _KEEP_PARAMS]
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+
+
+def _strip_query(href: str) -> str:
+    parts = urlsplit(href)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
+def is_invitation(subject: str) -> bool:
+    """Письмо-приглашение «Invitation to Apply for: …»."""
+    return subject.strip().lower().startswith("invitation to apply")
+
+
+def invite_title(subject: str) -> str:
+    """Название вакансии из темы приглашения."""
+    s = subject.strip()
+    marker = "invitation to apply for:"
+    if s.lower().startswith(marker):
+        return s[len(marker):].strip()
+    return s
+
+
+def extract_invite_info(payload: dict) -> dict:
+    """Из письма-приглашения достаёт описание вакансии, условия и ссылку на отклик."""
+    info = {"link": "", "description": "", "budget": ""}
+    html = _find_part(payload, "text/html")
+    if not html:
+        return info
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["style", "script", "head", "title"]):
+        tag.decompose()
+
+    for anchor in soup.find_all("a"):
+        href = anchor.get("href", "")
+        if _PROPOSAL_MARKER in href:
+            info["link"] = _strip_query(href)
+            break
+
+    cells = _leaf_cells(soup)
+    # Описание идёт после строки-приглашения и до блока «Payment Type»/«Submit Proposal»
+    start = 0
+    for i, cell in enumerate(cells):
+        low = cell.lower()
+        if "take a look at the job" in low or "invited to submit a proposal" in low:
+            start = i + 1
+
+    boiler = (
+        "read more about the job",
+        "invited to submit a proposal",
+        "i'd like to invite you",
+        "take a look at the job",
+        "please submit a proposal",
+    )
+    desc = []
+    for cell in cells[start:]:
+        low = cell.lower()
+        if low.startswith("payment type"):
+            budget = " ".join(cell.split())
+            for kw in ("Estimated Time", "Estimated Budget", "Time Commitment"):
+                budget = budget.replace(kw, "· " + kw)
+            info["budget"] = budget
+            break
+        if low in ("submit proposal", "decline") or "know someone for the job" in low:
+            break
+        if any(b in low for b in boiler):
+            continue
+        desc.append(cell)
+    info["description"] = "\n".join(desc)[:_DESC_LIMIT].strip()
+    return info
 
 
 def extract_upwork_info(payload: dict, client: str = "") -> dict:
