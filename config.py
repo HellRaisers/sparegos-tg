@@ -34,6 +34,31 @@ GMAIL_SUBJECT_QUERY = os.getenv(
 )
 GMAIL_LOOKBACK = os.getenv("GMAIL_LOOKBACK", "2d")
 
+# ── Маршрутизация по клиентам ──────────────────────────────
+# Формат: Имя=Тег[:chat_id];Имя=Тег[:chat_id]
+# «Имя» ищется в имени отправителя письма без учёта регистра. «Тег» попадает
+# в уведомление хештегом (#HillTribe) — так ПМ видит, что это клиентское
+# сообщение и по какому проекту. Если указан chat_id — копия уведомления
+# дополнительно уходит в этот рабочий чат (бот должен быть туда добавлен).
+CLIENT_ROUTES = os.getenv("CLIENT_ROUTES", "Peng=HillTribe;Liad=Truedose")
+
+
+def client_routes() -> list:
+    """Разбирает CLIENT_ROUTES в список {"match", "tag", "chat_id"}."""
+    routes = []
+    for item in CLIENT_ROUTES.split(";"):
+        item = item.strip()
+        if not item or "=" not in item:
+            continue
+        name, rest = item.split("=", 1)
+        tag, _, chat = rest.partition(":")
+        if name.strip() and tag.strip():
+            routes.append(
+                {"match": name.strip().lower(), "tag": tag.strip(), "chat_id": chat.strip()}
+            )
+    return routes
+
+
 # ── Прочее ─────────────────────────────────────────────────
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_SECONDS", "600"))
 

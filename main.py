@@ -63,6 +63,25 @@ def format_invite(title: str, budget: str, description: str, link: str) -> str:
     return "\n".join(lines)
 
 
+def _route(label: str) -> tuple:
+    """Ищет клиента в CLIENT_ROUTES по имени. Возвращает (тег, chat_id) или ("", "")."""
+    low = label.lower()
+    for route in config.client_routes():
+        if route["match"] in low:
+            return route["tag"], route["chat_id"]
+    return "", ""
+
+
+def _apply_route(client: str, text: str) -> tuple:
+    """Добавляет к тексту хештег проекта, если клиент есть в карте маршрутов.
+
+    Возвращает (текст, chat_id рабочего чата или "")."""
+    tag, route_chat = _route(client)
+    if tag:
+        text = f"🏷 #{_esc(tag)} — клиентское сообщение\n\n" + text
+    return text, route_chat
+
+
 def _build_message(full: dict) -> tuple:
     """Из полного письма собирает (заголовок_для_лога, subject, текст для Telegram)."""
     subject = get_header(full, "Subject")
@@ -105,7 +124,10 @@ def run_once() -> int:
 
         full = gmail_client.get_message(service, msg_id)
         client, subject, text = _build_message(full)
+        text, route_chat = _apply_route(client, text)
         telegram_client.send_message(token, chat_id, text)
+        if route_chat and route_chat != chat_id:
+            telegram_client.send_message(token, route_chat, text)
 
         processed.add(msg_id)
         state["processed"].append(msg_id)
@@ -140,7 +162,10 @@ def send_last(count: int = 1) -> int:
         msg_id = ref["id"]
         full = gmail_client.get_message(service, msg_id)
         client, subject, text = _build_message(full)
+        text, route_chat = _apply_route(client, text)
         telegram_client.send_message(token, chat_id, "🧪 <b>ТЕСТ</b>\n\n" + text)
+        if route_chat and route_chat != chat_id:
+            telegram_client.send_message(token, route_chat, "🧪 <b>ТЕСТ</b>\n\n" + text)
 
         if msg_id not in processed:
             processed.add(msg_id)
