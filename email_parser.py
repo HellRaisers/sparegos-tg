@@ -39,6 +39,30 @@ _PROPOSAL_MARKER = "/nx/proposals/"
 # Максимум символов описания вакансии в приглашении
 _DESC_LIMIT = 800
 
+# ── Письма «Invitation to Interview» (отправитель upwork@t.upwork.com) ──
+# Вступительная строка перед названием вакансии
+_INTERVIEW_INTRO = "a client invited you to a job"
+# Подпись перед личным сообщением клиента
+_INTERVIEW_NOTE_LABEL = "personal note from client"
+# Текст ссылки на приглашение
+_INTERVIEW_LINK_TEXT = "view invite"
+# Ячейки, на которых блок приглашения заканчивается
+_INTERVIEW_STOP = {"view invite", "decline", "mobile app", "follow us"}
+# Условия работы: «Hourly • More than 6 months», «Fixed-price • $250 • 1 to 3 months»
+_TERMS_RE = re.compile(r"^(hourly|fixed[\s-]?price)\b", re.I)
+# Upwork обрезает описание и вешает ссылку «more» — убираем этот хвост
+_MORE_TAIL_RE = re.compile(r"\s*(\.\.\.|…)\s*more\s*$", re.I)
+# Шапка и подвал письма — если не нашлось вступление, они не должны попасть в описание
+_CHROME_MARKERS = ("find work", "privacy policy", "follow us", "© 2015", "lytton ave")
+# Шаблонный текст приглашения — не является личным сообщением клиента
+_NOTE_BOILER_RE = re.compile(
+    r"(hello!?\s*)?i'?d like to invite you to take a look at the job i'?ve posted\.?"
+    r"|please submit a proposal if you'?re available and interested\.?",
+    re.I,
+)
+# Подпись клиента в конце заметки: «Kyle P.», «Vostock M.»
+_CLIENT_SIGN_RE = re.compile(r"(?:^|\s)(\S+\s+[A-Z]\.)\s*$")
+
 
 def get_header(message: dict, name: str) -> str:
     for header in message.get("payload", {}).get("headers", []):
@@ -157,6 +181,115 @@ def invite_title(subject: str) -> str:
     return s
 
 
+def is_interview(subject: str) -> bool:
+    """Письмо-приглашение на интервью «Invitation to Interview for: …»."""
+    return subject.strip().lower().startswith("invitation to interview")
+
+
+def interview_title(subject: str) -> str:
+    """Название вакансии из темы приглашения на интервью."""
+    s = subject.strip()
+    marker = "invitation to interview for:"
+    if s.lower().startswith(marker):
+        return s[len(marker):].strip()
+    return s
+
+
+def _interview_note(soup) -> tuple:
+    """Текст после подписи «Personal note from client» → (заметка, имя клиента).
+
+    Ячейку с заметкой нельзя взять через _leaf_cells: внутри неё лежит вложенная
+    пустая td-распорка, из-за которой ячейка не считается листовой. Поэтому идём
+    по документу от самой подписи.
+    """
+    label = soup.find(string=lambda s: s and _INTERVIEW_NOTE_LABEL in s.lower())
+    cell = label.find_parent("td") if label else None
+    if cell is None:
+        return "", ""
+
+    text = ""
+    for nxt in cell.find_all_next("td"):
+        candidate = " ".join(nxt.get_text(" ", strip=True).split())
+        candidate = candidate.translate(_INVISIBLE).strip()
+        if not candidate or candidate.lower() in _INTERVIEW_STOP:
+            continue
+        text = candidate
+        break
+    if not text:
+        return "", ""
+
+    client = ""
+    match = _CLIENT_SIGN_RE.search(text)
+    if match:
+        client = match.group(1)
+        text = text[: match.start()].strip()
+
+    note = " ".join(_NOTE_BOILER_RE.sub(" ", text).split()).strip()
+    return note[:_DESC_LIMIT], client
+
+
+def extract_interview_info(payload: dict, title: str = "") -> dict:
+    """Из письма «Invitation to Interview» достаёт условия, описание вакансии,
+    имя клиента, его личное сообщение и ссылку на приглашение.
+
+    Ссылки в таких письмах завёрнуты в трекинг-редирект link.t.upwork.com,
+    поэтому берём href у кнопки «View invite» как есть — он рабочий.
+    """
+    info = {"link": "", "terms": "", "description": "", "note": "", "client": ""}
+    html = _find_part(payload, "text/html")
+    if not html:
+        return info
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["style", "script", "head", "title"]):
+        tag.decompose()
+
+    for anchor in soup.find_all("a"):
+        text = " ".join(anchor.get_text().split()).lower()
+        href = anchor.get("href", "")
+        if text == _INTERVIEW_LINK_TEXT and href:
+            info["link"] = href
+            break
+    if not info["link"] and title:
+        # запасной вариант — ссылка с названием вакансии
+        for anchor in soup.find_all("a"):
+            if " ".join(anchor.get_text().split()) == title and anchor.get("href"):
+                info["link"] = anchor["href"]
+                break
+
+    cells = _leaf_cells(soup)
+    start = 0
+    for i, cell in enumerate(cells):
+        if cell.lower().startswith(_INTERVIEW_INTRO):
+            start = i + 1
+            break
+
+    body = []
+    for cell in cells[start:]:
+        low = cell.lower()
+        if low in _INTERVIEW_STOP or low.startswith("download the upwork app"):
+            break
+        if low.startswith(_INTERVIEW_NOTE_LABEL):
+            continue  # заметку берём отдельно, см. _interview_note
+        if title and cell.strip() == title.strip():
+            continue  # название уже взяли из темы
+        if any(marker in low for marker in _CHROME_MARKERS):
+            continue  # шапка/подвал письма
+        body.append(cell)
+
+    for cell in list(body):
+        # условия — это короткая строка вида «Hourly • More than 6 months»
+        if _TERMS_RE.match(cell) or ("•" in cell and len(cell) <= 80):
+            info["terms"] = cell
+            body.remove(cell)
+            break
+
+    if body:
+        longest = max(body, key=len)
+        info["description"] = _MORE_TAIL_RE.sub("…", longest)[:_DESC_LIMIT].strip()
+    info["note"], info["client"] = _interview_note(soup)
+    return info
+
+
 def extract_invite_info(payload: dict) -> dict:
     """Из письма-приглашения достаёт описание вакансии, условия и ссылку на отклик."""
     info = {"link": "", "description": "", "budget": ""}
@@ -202,7 +335,8 @@ def extract_invite_info(payload: dict) -> dict:
         if any(b in low for b in boiler):
             continue
         desc.append(cell)
-    info["description"] = "\n".join(desc)[:_DESC_LIMIT].strip()
+    text = _MORE_TAIL_RE.sub("…", "\n".join(desc))
+    info["description"] = text[:_DESC_LIMIT].strip()
     return info
 
 

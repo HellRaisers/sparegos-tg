@@ -20,11 +20,14 @@ import state as state_store
 import telegram_client
 from email_parser import (
     client_name,
+    extract_interview_info,
     extract_invite_info,
     extract_message_text,
     extract_upwork_info,
     get_header,
+    interview_title,
     invite_title,
+    is_interview,
     is_invitation,
 )
 
@@ -50,8 +53,28 @@ def format_message(client: str, project: str, message: str, link: str) -> str:
     return "\n".join(lines)
 
 
+def format_interview(
+    title: str, client: str, terms: str, description: str, note: str, link: str
+) -> str:
+    lines = ["🎯 <b>Приглашение на интервью (Upwork)</b> #инвайт #интервью", ""]
+    lines.append(f"<b>Вакансия:</b> {_esc(title)}")
+    if client:
+        lines.append(f"<b>Клиент:</b> {_esc(client)}")
+    if terms:
+        lines.append(f"<b>Условия:</b> {_esc(terms)}")
+    if note:
+        lines.append("")
+        lines.append(f"💬 <b>Сообщение клиента:</b> {_esc(note)}")
+    if description:
+        lines.append("")
+        lines.append(f"📝 {_esc(description)}")
+    lines.append("")
+    lines.append(f'🔗 <a href="{_esc(link or FALLBACK_INVITE)}">Открыть приглашение</a>')
+    return "\n".join(lines)
+
+
 def format_invite(title: str, budget: str, description: str, link: str) -> str:
-    lines = ["📨 <b>Приглашение на проект (Upwork)</b>", ""]
+    lines = ["📨 <b>Приглашение на проект (Upwork)</b> #инвайт", ""]
     lines.append(f"<b>Проект:</b> {_esc(title)}")
     if budget:
         lines.append(f"<b>Условия:</b> {_esc(budget)}")
@@ -72,32 +95,39 @@ def _route(label: str) -> tuple:
     return "", ""
 
 
-def _apply_route(client: str, text: str) -> tuple:
-    """Добавляет к тексту хештег проекта, если клиент есть в карте маршрутов.
-
-    Возвращает (текст, chat_id рабочего чата или "")."""
-    tag, route_chat = _route(client)
-    if tag:
-        text = f"🏷 #{_esc(tag)} — клиентское сообщение\n\n" + text
-    return text, route_chat
-
-
 def _build_message(full: dict) -> tuple:
-    """Из полного письма собирает (заголовок_для_лога, subject, текст для Telegram)."""
+    """Из полного письма собирает (заголовок_для_лога, subject, текст для Telegram,
+    chat_id рабочего чата или "").
+
+    Маршрутизация по клиентам применяется только к письмам с сообщениями:
+    у приглашений «клиент» — это название вакансии, туда тег вешать нельзя.
+    """
     subject = get_header(full, "Subject")
     payload = full.get("payload", {})
+
+    if is_interview(subject):
+        title = interview_title(subject)
+        inv = extract_interview_info(payload, title)
+        text = format_interview(
+            title, inv["client"], inv["terms"], inv["description"], inv["note"], inv["link"]
+        )
+        return title, subject, text, ""
 
     if is_invitation(subject):
         title = invite_title(subject)
         inv = extract_invite_info(payload)
-        return title, subject, format_invite(
-            title, inv["budget"], inv["description"], inv["link"]
-        )
+        text = format_invite(title, inv["budget"], inv["description"], inv["link"])
+        return title, subject, text, ""
 
     client = client_name(get_header(full, "From"), subject)
     info = extract_upwork_info(payload, client)
     message = extract_message_text(payload, client)
-    return client, subject, format_message(client, info["project"], message, info["link"])
+    text = format_message(client, info["project"], message, info["link"])
+
+    tag, route_chat = _route(client)
+    if tag:
+        text = f"🏷 #{_esc(tag)} — клиентское сообщение\n\n" + text
+    return client, subject, text, route_chat
 
 
 def run_once() -> int:
@@ -122,19 +152,29 @@ def run_once() -> int:
         if msg_id in processed:
             continue
 
-        full = gmail_client.get_message(service, msg_id)
-        client, subject, text = _build_message(full)
-        text, route_chat = _apply_route(client, text)
-        telegram_client.send_message(token, chat_id, text)
-        if route_chat and route_chat != chat_id:
-            telegram_client.send_message(token, route_chat, text)
+        try:
+            full = gmail_client.get_message(service, msg_id)
+            client, subject, text, route_chat = _build_message(full)
+            telegram_client.send_message(token, chat_id, text)
+        except Exception as exc:  # noqa: BLE001 — одно битое письмо не рвёт заход
+            print(f"[error] письмо {msg_id}: {exc}", file=sys.stderr)
+            continue
 
+        # Помечаем обработанным и сохраняем сразу: даже если следующее письмо
+        # или копия в рабочий чат упадут, дубля в общем канале не будет.
         processed.add(msg_id)
         state["processed"].append(msg_id)
+        state_store.save(config.STATE_FILE, state)
         sent += 1
         print(f"[tg] переслано: {client!r} — {subject!r}")
 
-    state_store.save(config.STATE_FILE, state)
+        if route_chat and route_chat != chat_id:
+            try:
+                telegram_client.send_message(token, route_chat, text)
+                print(f"[tg] копия в рабочий чат {route_chat}")
+            except Exception as exc:  # noqa: BLE001 — рабочий чат необязателен
+                print(f"[warn] рабочий чат {route_chat} недоступен: {exc}", file=sys.stderr)
+
     print(f"[ok] новых писем переслано: {sent}")
     return sent
 
@@ -161,11 +201,13 @@ def send_last(count: int = 1) -> int:
     for ref in reversed(messages[:count]):
         msg_id = ref["id"]
         full = gmail_client.get_message(service, msg_id)
-        client, subject, text = _build_message(full)
-        text, route_chat = _apply_route(client, text)
+        client, subject, text, route_chat = _build_message(full)
         telegram_client.send_message(token, chat_id, "🧪 <b>ТЕСТ</b>\n\n" + text)
         if route_chat and route_chat != chat_id:
-            telegram_client.send_message(token, route_chat, "🧪 <b>ТЕСТ</b>\n\n" + text)
+            try:
+                telegram_client.send_message(token, route_chat, "🧪 <b>ТЕСТ</b>\n\n" + text)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[warn] рабочий чат {route_chat} недоступен: {exc}", file=sys.stderr)
 
         if msg_id not in processed:
             processed.add(msg_id)
@@ -205,7 +247,7 @@ def main() -> None:
         print("[ok] авторизация выполнена, token.json создан")
         return
 
-    if args.send_last:
+    if args.send_last is not None:
         send_last(args.send_last)
         return
 
