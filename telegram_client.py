@@ -1,5 +1,6 @@
 """Отправка сообщений в Telegram через Bot API (без лишних зависимостей)."""
 import re
+import sys
 
 import requests
 
@@ -15,28 +16,56 @@ def _chunks(text: str, size: int):
         yield text[i : i + size]
 
 
-def _post(url: str, chat_id: str, text: str, parse_mode) -> None:
+def _post(url: str, chat_id: str, text: str, parse_mode, thread_id: str = "") -> None:
     data = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
     if parse_mode:
         data["parse_mode"] = parse_mode
+    if thread_id:
+        data["message_thread_id"] = thread_id
     resp = requests.post(url, data=data, timeout=30)
     resp.raise_for_status()
 
 
-def send_message(token: str, chat_id: str, text: str, parse_mode: str = "HTML") -> None:
-    """Шлёт текст в чат. Длинные сообщения режутся на части.
+def _migrated_chat_id(resp) -> str:
+    """Новый id чата, если группу превратили в супергруппу (иначе "")."""
+    try:
+        params = resp.json().get("parameters") or {}
+    except ValueError:
+        return ""
+    return str(params.get("migrate_to_chat_id") or "")
 
-    Если нарезка разорвала HTML-тег, Telegram отвечает 400 «can't parse entities».
-    В этом случае шлём тот же кусок простым текстом: уведомление важнее разметки,
-    иначе письмо не будет отправлено никогда и повиснет в вечных повторах.
+
+def send_message(
+    token: str, chat_id: str, text: str, parse_mode: str = "HTML", thread_id: str = ""
+) -> None:
+    """Шлёт текст в чат (при указании thread_id — в конкретную тему форума).
+    Длинные сообщения режутся на части.
+
+    Два случая, из-за которых уведомление иначе не дошло бы никогда:
+    - нарезка разорвала HTML-тег → Telegram отвечает 400 «can't parse entities»,
+      шлём тот же кусок простым текстом: уведомление важнее разметки;
+    - группу превратили в супергруппу → её id сменился, Telegram возвращает
+      новый в migrate_to_chat_id; отправляем туда и громко пишем в лог, чтобы
+      обновить TELEGRAM_CHAT_ID в .env.
     """
     url = API_URL.format(token=token)
     for chunk in _chunks(text, MAX_LEN):
         try:
-            _post(url, chat_id, chunk, parse_mode)
+            _post(url, chat_id, chunk, parse_mode, thread_id)
+            continue
         except requests.HTTPError as exc:
             resp = exc.response
-            if not (parse_mode and resp is not None and resp.status_code == 400
-                    and "parse" in resp.text.lower()):
+            if resp is None or resp.status_code != 400:
                 raise
-            _post(url, chat_id, _TAG_RE.sub("", chunk), None)
+            new_chat_id = _migrated_chat_id(resp)
+            if new_chat_id:
+                print(
+                    f"[warn] чат {chat_id} стал супергруппой, новый id {new_chat_id} — "
+                    f"пропиши его в TELEGRAM_CHAT_ID",
+                    file=sys.stderr,
+                )
+                _post(url, new_chat_id, chunk, parse_mode, thread_id)
+                continue
+            if not (parse_mode and "parse" in resp.text.lower()):
+                raise
+            _post(url, chat_id, _TAG_RE.sub("", chunk), None, thread_id)

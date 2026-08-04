@@ -59,6 +59,22 @@ def client_routes() -> list:
     return routes
 
 
+# ── Темы (форум) в основном чате ───────────────────────────
+# id темы (message_thread_id) для каждого вида уведомлений. Работает только
+# если основной чат — супергруппа с включёнными темами. Если не задано,
+# уведомление уходит в общую ленту чата, как раньше.
+TOPIC_IDS = {
+    "client": os.getenv("TOPIC_CLIENTS", ""),
+    "invite": os.getenv("TOPIC_INVITES", ""),
+    "message": os.getenv("TOPIC_MESSAGES", ""),
+}
+
+
+def topic_for(kind: str) -> str:
+    """id темы для вида уведомления: client / invite / message."""
+    return (TOPIC_IDS.get(kind) or "").strip()
+
+
 # ── Прочее ─────────────────────────────────────────────────
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL_SECONDS", "600"))
 

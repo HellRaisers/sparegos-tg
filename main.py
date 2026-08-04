@@ -91,9 +91,16 @@ def _route(label: str) -> tuple:
     return "", ""
 
 
-def _build_message(full: dict) -> tuple:
-    """Из полного письма собирает (заголовок_для_лога, subject, текст для Telegram,
-    chat_id рабочего чата или "").
+def _build_message(full: dict) -> dict:
+    """Из полного письма собирает всё, что нужно для отправки:
+
+    label      — короткое имя для лога;
+    subject    — тема письма;
+    text       — готовый текст для Telegram;
+    route_chat — chat_id рабочего чата проекта (или "");
+    kind       — вид уведомления, он же тема форума:
+                 invite — приглашения, client — письма известных клиентов
+                 из CLIENT_ROUTES, message — остальные сообщения.
 
     Маршрутизация по клиентам применяется только к письмам с сообщениями:
     у приглашений «клиент» — это название вакансии, туда тег вешать нельзя.
@@ -107,13 +114,15 @@ def _build_message(full: dict) -> tuple:
         text = format_interview(
             title, inv["client"], inv["description"], inv["note"], inv["link"]
         )
-        return title, subject, text, ""
+        return {"label": title, "subject": subject, "text": text,
+                "route_chat": "", "kind": "invite"}
 
     if is_invitation(subject):
         title = invite_title(subject)
         inv = extract_invite_info(payload)
         text = format_invite(title, inv["description"], inv["link"])
-        return title, subject, text, ""
+        return {"label": title, "subject": subject, "text": text,
+                "route_chat": "", "kind": "invite"}
 
     client = client_name(get_header(full, "From"), subject)
     info = extract_upwork_info(payload, client)
@@ -123,7 +132,8 @@ def _build_message(full: dict) -> tuple:
     tag, route_chat = _route(client)
     if tag:
         text = f"🏷 #{_esc(tag)} — клиентское сообщение\n\n" + text
-    return client, subject, text, route_chat
+    return {"label": client, "subject": subject, "text": text,
+            "route_chat": route_chat, "kind": "client" if tag else "message"}
 
 
 def run_once() -> int:
@@ -150,8 +160,12 @@ def run_once() -> int:
 
         try:
             full = gmail_client.get_message(service, msg_id)
-            client, subject, text, route_chat = _build_message(full)
-            telegram_client.send_message(token, chat_id, text)
+            msg = _build_message(full)
+            client, subject = msg["label"], msg["subject"]
+            text, route_chat = msg["text"], msg["route_chat"]
+            telegram_client.send_message(
+                token, chat_id, text, thread_id=config.topic_for(msg["kind"])
+            )
         except Exception as exc:  # noqa: BLE001 — одно битое письмо не рвёт заход
             print(f"[error] письмо {msg_id}: {exc}", file=sys.stderr)
             continue
@@ -197,11 +211,15 @@ def send_last(count: int = 1) -> int:
     for ref in reversed(messages[:count]):
         msg_id = ref["id"]
         full = gmail_client.get_message(service, msg_id)
-        client, subject, text, route_chat = _build_message(full)
-        telegram_client.send_message(token, chat_id, "🧪 <b>ТЕСТ</b>\n\n" + text)
+        msg = _build_message(full)
+        client, subject = msg["label"], msg["subject"]
+        text, route_chat = "🧪 <b>ТЕСТ</b>\n\n" + msg["text"], msg["route_chat"]
+        telegram_client.send_message(
+            token, chat_id, text, thread_id=config.topic_for(msg["kind"])
+        )
         if route_chat and route_chat != chat_id:
             try:
-                telegram_client.send_message(token, route_chat, "🧪 <b>ТЕСТ</b>\n\n" + text)
+                telegram_client.send_message(token, route_chat, text)
             except Exception as exc:  # noqa: BLE001
                 print(f"[warn] рабочий чат {route_chat} недоступен: {exc}", file=sys.stderr)
 
