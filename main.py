@@ -54,33 +54,29 @@ def format_message(client: str, project: str, message: str, link: str) -> str:
 
 
 def format_interview(
-    title: str, client: str, terms: str, description: str, note: str, link: str
+    title: str, client: str, description: str, note: str, link: str
 ) -> str:
     lines = ["🎯 <b>Приглашение на интервью (Upwork)</b> #инвайт #интервью", ""]
     lines.append(f"<b>Вакансия:</b> {_esc(title)}")
     if client:
         lines.append(f"<b>Клиент:</b> {_esc(client)}")
-    if terms:
-        lines.append(f"<b>Условия:</b> {_esc(terms)}")
     if note:
         lines.append("")
         lines.append(f"💬 <b>Сообщение клиента:</b> {_esc(note)}")
     if description:
         lines.append("")
-        lines.append(f"📝 {_esc(description)}")
+        lines.append(_esc(description))
     lines.append("")
     lines.append(f'🔗 <a href="{_esc(link or FALLBACK_INVITE)}">Открыть приглашение</a>')
     return "\n".join(lines)
 
 
-def format_invite(title: str, budget: str, description: str, link: str) -> str:
+def format_invite(title: str, description: str, link: str) -> str:
     lines = ["📨 <b>Приглашение на проект (Upwork)</b> #инвайт", ""]
     lines.append(f"<b>Проект:</b> {_esc(title)}")
-    if budget:
-        lines.append(f"<b>Условия:</b> {_esc(budget)}")
     if description:
         lines.append("")
-        lines.append(f"📝 {_esc(description)}")
+        lines.append(_esc(description))
     lines.append("")
     lines.append(f'🔗 <a href="{_esc(link or FALLBACK_INVITE)}">Открыть приглашение</a>')
     return "\n".join(lines)
@@ -109,14 +105,14 @@ def _build_message(full: dict) -> tuple:
         title = interview_title(subject)
         inv = extract_interview_info(payload, title)
         text = format_interview(
-            title, inv["client"], inv["terms"], inv["description"], inv["note"], inv["link"]
+            title, inv["client"], inv["description"], inv["note"], inv["link"]
         )
         return title, subject, text, ""
 
     if is_invitation(subject):
         title = invite_title(subject)
         inv = extract_invite_info(payload)
-        text = format_invite(title, inv["budget"], inv["description"], inv["link"])
+        text = format_invite(title, inv["description"], inv["link"])
         return title, subject, text, ""
 
     client = client_name(get_header(full, "From"), subject)
