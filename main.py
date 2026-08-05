@@ -1,7 +1,7 @@
 """Upwork → Telegram.
 
 Проверяет почту на новые письма от Upwork с уведомлением о сообщении клиента
-и шлёт в Telegram-чат: кто написал, по какому проекту, сам текст и ссылку.
+и шлёт в Telegram-чат: кто написал и сам текст сообщения.
 
 Использование:
     python main.py --auth        # один раз: авторизация в Google (token.json)
@@ -23,7 +23,6 @@ from email_parser import (
     extract_interview_info,
     extract_invite_info,
     extract_message_text,
-    extract_upwork_info,
     get_header,
     interview_title,
     invite_title,
@@ -31,8 +30,7 @@ from email_parser import (
     is_invitation,
 )
 
-# Запасные ссылки, если в письме не нашлось прямой ссылки
-FALLBACK_LINK = "https://www.upwork.com/nx/messages/"
+# Запасная ссылка, если в письме приглашения не нашлось прямой
 FALLBACK_INVITE = "https://www.upwork.com/nx/find-work/"
 
 
@@ -40,16 +38,20 @@ def _esc(text: str) -> str:
     return html_lib.escape(text)
 
 
-def format_message(client: str, project: str, message: str, link: str) -> str:
-    lines = ["📩 <b>Новое сообщение в Upwork</b>", ""]
-    lines.append(f"<b>От:</b> {_esc(client)}")
-    if project and project != client:
-        lines.append(f"<b>Проект:</b> {_esc(project)}")
+def format_message(client: str, message: str, tag: str = "") -> str:
+    """Уведомление о сообщении клиента.
+
+    У клиентов из CLIENT_ROUTES вместо общего заголовка стоит хештег проекта:
+    он и так говорит, что это клиентское сообщение.
+    """
+    if tag:
+        lines = [f"🏷 #{_esc(tag)} — клиентское сообщение"]
+    else:
+        lines = ["📩 <b>Новое сообщение в Upwork</b>"]
+    lines += ["", f"<b>От:</b> {_esc(client)}"]
     if message:
         lines.append("")
         lines.append(f"💬 {_esc(message)}")
-    lines.append("")
-    lines.append(f'🔗 <a href="{_esc(link or FALLBACK_LINK)}">Открыть переписку в Upwork</a>')
     return "\n".join(lines)
 
 
@@ -125,13 +127,9 @@ def _build_message(full: dict) -> dict:
                 "route_chat": "", "kind": "invite"}
 
     client = client_name(get_header(full, "From"), subject)
-    info = extract_upwork_info(payload, client)
     message = extract_message_text(payload, client)
-    text = format_message(client, info["project"], message, info["link"])
-
     tag, route_chat = _route(client)
-    if tag:
-        text = f"🏷 #{_esc(tag)} — клиентское сообщение\n\n" + text
+    text = format_message(client, message, tag)
     return {"label": client, "subject": subject, "text": text,
             "route_chat": route_chat, "kind": "client" if tag else "message"}
 
