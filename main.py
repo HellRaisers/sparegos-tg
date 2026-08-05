@@ -226,10 +226,12 @@ def send_last(count: int = 1) -> int:
         if msg_id not in processed:
             processed.add(msg_id)
             state["processed"].append(msg_id)
+            # сохраняем сразу: сбой на следующем письме не должен приводить
+            # к повторной отправке уже разосланных
+            state_store.save(config.STATE_FILE, state)
         sent += 1
         print(f"[test] отправлено: {client!r} — {subject!r}")
 
-    state_store.save(config.STATE_FILE, state)
     print(f"[ok] тест: отправлено {sent}")
     return sent
 
