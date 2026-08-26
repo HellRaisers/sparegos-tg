@@ -172,7 +172,7 @@ sudo systemctl enable --now upwork-tg
 
 | Тема | Что туда идёт | Переменная |
 |---|---|---|
-| Клиенты | письма клиентов из `CLIENT_ROUTES` (Peng, Liad) | `TOPIC_CLIENTS` |
+| Клиенты | письма клиентов из `CLIENT_ROUTES` (Peng, Liad, Marc) | `TOPIC_CLIENTS` |
 | Инвайты | приглашения `Invitation to Interview` и `Invitation to Apply` | `TOPIC_INVITES` |
 | Сообщения | сообщения остальных клиентов | `TOPIC_MESSAGES` |
 
